@@ -28,7 +28,7 @@ def remove_unused_flags(args: list[str]):
 
 
 def asm_hook(asm_file: str):
-    asm_morph(asm_file)
+    asm_morph(asm_file, asm_file)
 
 
 def quotate_args(args: list[str]) -> list[str]:

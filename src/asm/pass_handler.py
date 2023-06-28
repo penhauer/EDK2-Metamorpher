@@ -16,11 +16,11 @@ def do_apply_passes(lines: list[str]) -> list[str]:
     return lines
 
 
-def asm_morph(asm_file: str):
-    f = open(asm_file)
+def asm_morph(input_file: str, output_file: str):
+    f = open(input_file)
     lines = f.readlines()
     f.close()
     new_lines = do_apply_passes(lines)
-    g = open(asm_file, mode='w')
+    g = open(output_file, mode='w')
     g.writelines(new_lines)
     g.close()
