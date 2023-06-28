@@ -80,8 +80,6 @@ class SectionPermutationPass(MorphingPass):
         section_finder = SectionFinder(self.lines)
         partition = section_finder.find_sections()
         n = len(partition.sections_start)
-        print(partition.sections_start)
-        # breakpoint()
         permutation = generate_permutation(n)
         new_lines = []
         new_lines.extend(self.lines[:partition.first_section])
