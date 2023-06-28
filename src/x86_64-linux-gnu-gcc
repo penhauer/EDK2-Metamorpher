@@ -1,0 +1,313 @@
+#!/usr/bin/env python3
+
+import sys
+import subprocess
+import re
+import copy
+import logging
+from asm.pass_handler import asm_morph
+
+
+def get_real_executable(fake_executable: str) -> str:
+    subp = subprocess.run(args=['basename', fake_executable], capture_output=True, text=True)
+    program = subp.stdout.strip()
+    executable = f'/usr/bin/{program}'
+    return executable
+
+
+def replace_real_executable(args: list[str]):
+    fake_executable = args[0]
+    real_executable = get_real_executable(fake_executable)
+    args[0] = real_executable
+
+
+def remove_unused_flags(args: list[str]):
+    args.remove('-g')
+    args.remove('-flto')
+    args.remove('-DUSING_LTO')
+
+
+def asm_hook(asm_file: str):
+    asm_morph(asm_file)
+
+
+def quotate_args(args: list[str]) -> list[str]:
+    return args[0:1] + list(map(lambda s: f'"{s}"', args[1:]))
+
+
+def asm_compile(normal_args: list[str]):
+    args = copy.deepcopy(normal_args)
+    remove_unused_flags(args)
+    replace_real_executable(args)
+
+    out_ind = args.index('-o')
+    assert out_ind != -1
+    obj_file = args[out_ind + 1]
+    match = re.fullmatch(r'(.*)\.obj', obj_file)
+    assert match is not None
+    out_file = match.group(1)
+    asm_file = f'{out_file}.s'
+    args[out_ind + 1] = asm_file
+
+    args.insert(1, "-S")
+
+    subprocess.run(
+        args,
+        capture_output=True,
+        text=True,
+        check=True
+    )
+
+    asm_hook(asm_file)
+
+    args.remove('-S')
+    out_ind = args.index('-o')
+    assert out_ind != -1
+    morphed_file = f'{out_file}.obj'
+    args[-1] = asm_file
+    args[out_ind + 1] = morphed_file
+    child = subprocess.run(
+        args,
+        capture_output=True,
+        text=True,
+        # check=True,
+    )
+    if child.returncode != 0:
+        # breakpoint()
+        logging.error(child.stderr)
+        raise Exception("bad subprocess")
+
+def non_debug_compile(normal_args: list[str]):
+    args = copy.deepcopy(normal_args)
+    remove_unused_flags(args)
+    replace_real_executable(args)
+    subprocess.run(args)
+
+
+def normal_compile(normal_args: list[str]):
+    args = copy.deepcopy(normal_args)
+    replace_real_executable(args)
+    subprocess.run(args, check=True)
+
+
+def is_c_compilation(args: list[str]):
+    if args[-1].endswith('.c'):
+        return True
+    return False
+
+
+def in_black_list(args: list[str]):
+    black_list = [
+        "PcAtChipsetPkg/PcatRealTimeClockRuntimeDxe/PcRtc.c",
+    ]
+    if args[1].startswith('@'):
+        return True
+    for excluded in black_list:
+        if excluded in args[-1]:
+            return True
+    return False
+
+
+if __name__ == '__main__':
+    logging.basicConfig(filename='./pybuild.log', level=logging.DEBUG)
+
+
+    normal_args: list[str] = sys.argv
+
+    if not is_c_compilation(normal_args):
+        logging.info(f"excluded: {normal_args}")
+        normal_compile(normal_args)
+        exit(0)
+
+    if in_black_list(normal_args):
+        normal_compile(normal_args)
+        exit(0)
+
+    try:
+        # non_debug_compile(normal_args)
+        asm_compile(normal_args)
+    except Exception as e:
+        logging.info(f"args are:\n{normal_args}")
+        logging.exception(e)
+        raise e
+        # normal_compile(normal_args)
+
+"""
+"x86_64-linux-gnu-gcc"  \
+        -g \
+        -Os \
+        -fshort-wchar \
+        -fno-builtin \
+        -fno-strict-aliasing \
+        -Wall \
+        -Werror \
+        -Wno-array-bounds \
+        -include AutoGen.h \
+        -fno-common \
+        -ffunction-sections \
+        -fdata-sections \
+        -DSTRING_ARRAY_NAME=CpuDxeStrings \
+        -m64 \
+        -fno-stack-protector \
+        "-DEFIAPI=__attribute__((ms_abi))" \
+        -maccumulate-outgoing-args \
+        -mno-red-zone \
+        -Wno-address \
+        -mcmodel=small \
+        -fpie \
+        -fno-asynchronous-unwind-tables \
+        -Wno-address \
+        -flto -DUSING_LTO \
+        -Os \
+        -Wno-unused-but-set-variable \
+        -D DISABLE_NEW_DEPRECATED_INTERFACES \
+        -c \
+        -o /home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/Build/UefiPayloadPkgX64/RELEASE_COREBOOT/X64/UefiCpuPkg/CpuDxe/CpuDxe/OUTPUT/./CpuDxe.obj \
+        -I/home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/mrchromebox/UefiCpuPkg/CpuDxe/X64 \
+        -I/home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/mrchromebox/UefiCpuPkg/CpuDxe \
+        -I/home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/Build/UefiPayloadPkgX64/RELEASE_COREBOOT/X64/UefiCpuPkg/CpuDxe/CpuDxe/DEBUG \
+        -I/home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/mrchromebox/MdePkg \
+        -I/home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/mrchromebox/MdePkg/Include \
+        -I/home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/mrchromebox/MdePkg/Test/UnitTest/Include \
+        -I/home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/mrchromebox/MdePkg/Include/X64 \
+        -I/home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/mrchromebox/MdeModulePkg \
+        -I/home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/mrchromebox/MdeModulePkg/Include \
+        -I/home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/mrchromebox/UefiCpuPkg \
+        -I/home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/mrchromebox/UefiCpuPkg/Include \
+        /home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/mrchromebox/UefiCpuPkg/CpuDxe/CpuDxe.c
+
+
+
+"x86_64-linux-gnu-gcc"  \
+        -Os \
+        -fshort-wchar \
+        -fno-builtin \
+        -fno-strict-aliasing \
+        -Wall \
+        -Werror \
+        -Wno-array-bounds \
+        -include AutoGen.h \
+        -fno-common \
+        -ffunction-sections \
+        -fdata-sections \
+        -DSTRING_ARRAY_NAME=CpuDxeStrings \
+        -m64 \
+        -fno-stack-protector \
+        "-DEFIAPI=__attribute__((ms_abi))" \
+        -maccumulate-outgoing-args \
+        -mno-red-zone \
+        -Wno-address \
+        -mcmodel=small \
+        -fpie \
+        -fno-asynchronous-unwind-tables \
+        -Wno-address \
+        -Os \
+        -Wno-unused-but-set-variable \
+        -D DISABLE_NEW_DEPRECATED_INTERFACES \
+        -c \
+        -o /home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/Build/UefiPayloadPkgX64/RELEASE_COREBOOT/X64/UefiCpuPkg/CpuDxe/CpuDxe/OUTPUT/./CpuDxe.obj \
+        -I/home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/mrchromebox/UefiCpuPkg/CpuDxe/X64 \
+        -I/home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/mrchromebox/UefiCpuPkg/CpuDxe \
+        -I/home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/Build/UefiPayloadPkgX64/RELEASE_COREBOOT/X64/UefiCpuPkg/CpuDxe/CpuDxe/DEBUG \
+        -I/home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/mrchromebox/MdePkg \
+        -I/home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/mrchromebox/MdePkg/Include \
+        -I/home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/mrchromebox/MdePkg/Test/UnitTest/Include \
+        -I/home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/mrchromebox/MdePkg/Include/X64 \
+        -I/home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/mrchromebox/MdeModulePkg \
+        -I/home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/mrchromebox/MdeModulePkg/Include \
+        -I/home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/mrchromebox/UefiCpuPkg \
+        -I/home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/mrchromebox/UefiCpuPkg/Include \
+        /home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/mrchromebox/UefiCpuPkg/CpuDxe/CpuDxe.c
+
+
+
+
+
+"x86_64-linux-gnu-gcc"  \
+        -S \
+        -Os \
+        -fshort-wchar \
+        -fno-builtin \
+        -fno-strict-aliasing \
+        -Wall \
+        -Werror \
+        -Wno-array-bounds \
+        -include AutoGen.h \
+        -fno-common \
+        -ffunction-sections \
+        -fdata-sections \
+        -DSTRING_ARRAY_NAME=CpuDxeStrings \
+        -m64 \
+        -fno-stack-protector \
+        "-DEFIAPI=__attribute__((ms_abi))" \
+        -maccumulate-outgoing-args \
+        -mno-red-zone \
+        -Wno-address \
+        -mcmodel=small \
+        -fpie \
+        -fno-asynchronous-unwind-tables \
+        -Wno-address \
+        -Os \
+        -Wno-unused-but-set-variable \
+        -D DISABLE_NEW_DEPRECATED_INTERFACES \
+        -c \
+        -o /home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/Build/UefiPayloadPkgX64/RELEASE_COREBOOT/X64/UefiCpuPkg/CpuDxe/CpuDxe/OUTPUT/./CpuDxe.s \
+        -I/home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/mrchromebox/UefiCpuPkg/CpuDxe/X64 \
+        -I/home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/mrchromebox/UefiCpuPkg/CpuDxe \
+        -I/home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/Build/UefiPayloadPkgX64/RELEASE_COREBOOT/X64/UefiCpuPkg/CpuDxe/CpuDxe/DEBUG \
+        -I/home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/mrchromebox/MdePkg \
+        -I/home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/mrchromebox/MdePkg/Include \
+        -I/home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/mrchromebox/MdePkg/Test/UnitTest/Include \
+        -I/home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/mrchromebox/MdePkg/Include/X64 \
+        -I/home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/mrchromebox/MdeModulePkg \
+        -I/home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/mrchromebox/MdeModulePkg/Include \
+        -I/home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/mrchromebox/UefiCpuPkg \
+        -I/home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/mrchromebox/UefiCpuPkg/Include \
+        /home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/mrchromebox/UefiCpuPkg/CpuDxe/CpuDxe.c
+
+
+
+
+"x86_64-linux-gnu-gcc"  \
+        -Os \
+        -fshort-wchar \
+        -fno-builtin \
+        -fno-strict-aliasing \
+        -Wall \
+        -Werror \
+        -Wno-array-bounds \
+        -include AutoGen.h \
+        -fno-common \
+        -ffunction-sections \
+        -fdata-sections \
+        -DSTRING_ARRAY_NAME=CpuDxeStrings \
+        -m64 \
+        -fno-stack-protector \
+        "-DEFIAPI=__attribute__((ms_abi))" \
+        -maccumulate-outgoing-args \
+        -mno-red-zone \
+        -Wno-address \
+        -mcmodel=small \
+        -fpie \
+        -fno-asynchronous-unwind-tables \
+        -Wno-address \
+        -Os \
+        -Wno-unused-but-set-variable \
+        -D DISABLE_NEW_DEPRECATED_INTERFACES \
+        -c \
+        -o /home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/Build/UefiPayloadPkgX64/RELEASE_COREBOOT/X64/UefiCpuPkg/CpuDxe/CpuDxe/OUTPUT/./CpuDxe.obj_fake \
+        -I/home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/mrchromebox/UefiCpuPkg/CpuDxe/X64 \
+        -I/home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/mrchromebox/UefiCpuPkg/CpuDxe \
+        -I/home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/Build/UefiPayloadPkgX64/RELEASE_COREBOOT/X64/UefiCpuPkg/CpuDxe/CpuDxe/DEBUG \
+        -I/home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/mrchromebox/MdePkg \
+        -I/home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/mrchromebox/MdePkg/Include \
+        -I/home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/mrchromebox/MdePkg/Test/UnitTest/Include \
+        -I/home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/mrchromebox/MdePkg/Include/X64 \
+        -I/home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/mrchromebox/MdeModulePkg \
+        -I/home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/mrchromebox/MdeModulePkg/Include \
+        -I/home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/mrchromebox/UefiCpuPkg \
+        -I/home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/mrchromebox/UefiCpuPkg/Include \
+        /home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/Build/UefiPayloadPkgX64/RELEASE_COREBOOT/X64/UefiCpuPkg/CpuDxe/CpuDxe/OUTPUT/./CpuDxe.s
+
+diff /home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/Build/UefiPayloadPkgX64/RELEASE_COREBOOT/X64/UefiCpuPkg/CpuDxe/CpuDxe/OUTPUT/./CpuDxe.obj_fake /home/amirmohammad/Desktop/Semester_9/Thesis_Project/SubProject2/coreboot/payloads/external/edk2/workspace/Build/UefiPayloadPkgX64/RELEASE_COREBOOT/X64/UefiCpuPkg/CpuDxe/CpuDxe/OUTPUT/./CpuDxe.obj --report-identical-files
+"""
